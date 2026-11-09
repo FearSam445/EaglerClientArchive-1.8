@@ -1,45 +1,61 @@
 import { expect, test } from 'claude-code/testing'
 
-test('/prompt-master rewrites the draft and fills the box', async ($, on) => {
-  let filled = ''
-  let asked = ''
-  on('prompt.read', () => ({ value: { text: 'fix the login bug its broken', cursor: 0 } }))
-  on('model.complete', (_, e) => {
-    asked = typeof e.prompt === 'string' ? e.prompt : ''
-    return { value: { isAnswered: true, text: 'Please fix the login bug.', usage: { input_tokens: 1, output_tokens: 1 } } }
-  })
-  on('prompt.fill', (_, e) => {
-    filled = e.text
-    return { isFilled: true, text: e.text, cursor: e.text.length }
-  })
-
-  const r = await $.command.run({ command: 'prompt-master', args: '' })
-  expect(asked).toContain('fix the login bug its broken')
-  expect(filled).toBe('Please fix the login bug.')
-  expect(r.text).toContain('rewritten')
+const reply = (text: string) => ({
+  value: { isAnswered: true, text, usage: { input_tokens: 1, output_tokens: 1 } },
 })
 
-test('an empty draft is not sent to the model', async ($, on) => {
+test('++ rewrites one prompt before it is sent', async ($, on) => {
+  let asked = ''
+  let sent = ''
+  on('model.complete', (_, e) => {
+    asked = typeof e.prompt === 'string' ? e.prompt : ''
+    return reply('Please fix the login bug.')
+  })
+  on('prompt.submit', (_, e) => {
+    sent = e.text
+    return { text: e.text }
+  })
+
+  await $.prompt.submit({ text: '++ fix login its broke', origin: { kind: 'bridge' }, wait: false })
+  expect(asked).toContain('fix login its broke')
+  expect(sent).toBe('Please fix the login bug.')
+})
+
+test('with auto mode off, a plain prompt is untouched', async ($, on) => {
   let called = false
-  on('prompt.read', () => ({ value: { text: '   ', cursor: 0 } }))
+  let sent = ''
   on('model.complete', () => {
     called = true
-    return { value: { isAnswered: true, text: 'x', usage: { input_tokens: 0, output_tokens: 0 } } }
+    return reply('x')
+  })
+  on('prompt.submit', (_, e) => {
+    sent = e.text
+    return { text: e.text }
+  })
+
+  await $.prompt.submit({ text: 'hello', origin: { kind: 'composer' }, wait: false })
+  expect(called).toBe(false)
+  expect(sent).toBe('hello')
+})
+
+test('/prompt-master turns auto mode on, then every prompt is rewritten', async ($, on) => {
+  let sent = ''
+  on('model.complete', () => reply('Better prompt.'))
+  on('prompt.submit', (_, e) => {
+    sent = e.text
+    return { text: e.text }
   })
 
   const r = await $.command.run({ command: 'prompt-master', args: '' })
-  expect(called).toBe(false)
-  expect(r.text).toContain('Type a rough prompt first')
+  expect(r.text).toContain('ON')
+  await $.prompt.submit({ text: 'make game snake', origin: { kind: 'sdk' }, wait: false })
+  expect(sent).toBe('Better prompt.')
 })
 
-test('/prompt-master <text> rewrites the typed text', async ($, on) => {
-  let asked = ''
-  on('model.complete', (_, e) => {
-    asked = typeof e.prompt === 'string' ? e.prompt : ''
-    return { value: { isAnswered: true, text: 'Better.', usage: { input_tokens: 1, output_tokens: 1 } } }
-  })
-  on('prompt.fill', (_, e) => ({ isFilled: true, text: e.text, cursor: 0 }))
+test('/prompt-master <text> previews when the app has its own prompt box', async ($, on) => {
+  on('model.complete', () => reply('Better.'))
+  on('prompt.fill', () => ({ isFilled: false, refusal: 'no_composer' as const }))
 
-  await $.command.run({ command: 'prompt-master', args: 'make a snake game' })
-  expect(asked).toContain('make a snake game')
+  const r = await $.command.run({ command: 'prompt-master', args: 'make a snake game' })
+  expect(r.text).toContain('Better.')
 })
